@@ -128,15 +128,6 @@
           ]
         },
         {
-          "name": "enableFuzzySearch",
-          "type": "checkbox",
-          "required": false,
-          "title": "Fuzzy Search",
-          "description": "When enabled, allows searching items using fuzzy search",
-          "default": true,
-          "label": "Enable fuzzy search"
-        },
-        {
           "name": "maxResultsPerSource",
           "type": "dropdown",
           "required": false,

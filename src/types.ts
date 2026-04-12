@@ -11,7 +11,6 @@ export interface SearchSafariAioPreferences {
   firstPriority: PriorityLabel;
   secondPriority: PriorityLabel;
   thirdPriority: PriorityLabel;
-  enableFuzzySearch: boolean;
   maxResultsPerSource: string;
 }
 

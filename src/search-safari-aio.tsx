@@ -166,12 +166,9 @@ export default function Command() {
   );
 
   const filteredBySource = useMemo<Record<SourceKind, UnifiedEntry[]>>(() => {
-    const tabs = searchEntries(tabEntries, searchText, preferences.enableFuzzySearch).slice(0, maxResultsPerSource);
-    const bookmark = searchEntries(bookmarkEntries, searchText, preferences.enableFuzzySearch).slice(
-      0,
-      maxResultsPerSource,
-    );
-    const historyItems = searchEntries(historyEntries, searchText, preferences.enableFuzzySearch)
+    const tabs = searchEntries(tabEntries, searchText, true).slice(0, maxResultsPerSource);
+    const bookmark = searchEntries(bookmarkEntries, searchText, true).slice(0, maxResultsPerSource);
+    const historyItems = searchEntries(historyEntries, searchText, true)
       .sort((a, b) => (b.sortDate ?? 0) - (a.sortDate ?? 0))
       .slice(0, maxResultsPerSource);
 
@@ -180,7 +177,7 @@ export default function Command() {
       bookmark,
       history: historyItems,
     };
-  }, [tabEntries, searchText, preferences.enableFuzzySearch, maxResultsPerSource, bookmarkEntries, historyEntries]);
+  }, [tabEntries, searchText, maxResultsPerSource, bookmarkEntries, historyEntries]);
 
   const flatResults = useMemo(() => {
     const ordered: UnifiedEntry[] = [];

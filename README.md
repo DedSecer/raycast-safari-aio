@@ -14,7 +14,6 @@ Search Safari tabs, bookmarks, and history in a single Raycast command.
 	- Flat mixed list
 	- Grouped sections
 - Optional inclusion of iCloud remote tabs from other devices.
-- Fuzzy search toggle.
 
 ## Preferences
 
@@ -24,7 +23,6 @@ In Raycast command preferences for Search Safari-Aio:
 - Devices: include iCloud tabs
 - List Mode: flat or section
 - Priority 1 / 2 / 3: choose source order among Tabs, Bookmarks, and History
-- Fuzzy Search: enable or disable fuzzy matching
 - Max Results Per Source: 50 / 100 / 200
 
 ## Notes

@@ -28,16 +28,21 @@ export function searchEntries(entries: UnifiedEntry[], searchText: string, useFu
     return entries;
   }
 
+  const lowered = query.toLowerCase();
+  const tokens = lowered.split(/\s+/).filter((token) => token.length > 0);
+
+  const tokenMatched = entries.filter((entry) => {
+    const title = entry.title.toLowerCase();
+    const url = entry.url.toLowerCase();
+    const domain = entry.domain?.toLowerCase() ?? "";
+    const detail = entry.detail?.toLowerCase() ?? "";
+    const haystack = `${title} ${url} ${domain} ${detail}`;
+    return tokens.every((token) => haystack.includes(token));
+  });
+
   // For very short queries, plain includes is faster and avoids Fuse overhead.
   if (!useFuzzy || query.length < 2) {
-    const lowered = query.toLowerCase();
-    return entries.filter((entry) => {
-      const title = entry.title.toLowerCase();
-      const url = entry.url.toLowerCase();
-      const domain = entry.domain?.toLowerCase() ?? "";
-      const detail = entry.detail?.toLowerCase() ?? "";
-      return title.includes(lowered) || url.includes(lowered) || domain.includes(lowered) || detail.includes(lowered);
-    });
+    return tokenMatched;
   }
 
   const fuse = new Fuse(entries, {
@@ -51,7 +56,22 @@ export function searchEntries(entries: UnifiedEntry[], searchText: string, useFu
     ignoreLocation: true,
   });
 
-  return fuse.search(query).map((result) => result.item);
+  const fuzzyMatched = fuse.search(query).map((result) => result.item);
+  if (tokenMatched.length === 0) {
+    return fuzzyMatched;
+  }
+
+  // Prioritize exact token containment and append fuzzy-only matches.
+  const seen = new Set(tokenMatched.map((entry) => entry.id));
+  const merged = [...tokenMatched];
+  for (const entry of fuzzyMatched) {
+    if (!seen.has(entry.id)) {
+      seen.add(entry.id);
+      merged.push(entry);
+    }
+  }
+
+  return merged;
 }
 
 export function getSourceLabel(source: SourceKind): string {

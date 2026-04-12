@@ -7,7 +7,7 @@ import { runAppleScript } from "@raycast/utils";
 import { execFile } from "child_process";
 import { parse as parsePlist } from "plist";
 import { BookmarkEntry, BookmarkLeaf, BookmarkTreeNode, HistoryItem, LocalTab, RemoteTab } from "../types";
-import { escapeSqlLike, getUrlDomain } from "../utils";
+import { getUrlDomain } from "../utils";
 
 const execFileAsync = promisify(execFile);
 
@@ -133,22 +133,7 @@ function getHistoryDbPath(appIdentifier: string): string {
   return `${resolve(homedir(), `Library/${appIdentifier.replace(/ /g, "")}/`)}/History.db`;
 }
 
-function getHistoryQuery(searchText: string, maxResults: number): string {
-  const terms = searchText
-    .trim()
-    .split(/\s+/)
-    .filter((term) => term.length > 0)
-    .map((term) => escapeSqlLike(term));
-
-  const whereClause = terms.length
-    ? `WHERE ${terms
-        .map(
-          (term) =>
-            `(history_items.url LIKE "%${term}%" ESCAPE "\\" OR history_visits.title LIKE "%${term}%" ESCAPE "\\")`,
-        )
-        .join(" AND ")}`
-    : "";
-
+function getHistoryQuery(maxResults: number): string {
   return `
     SELECT history_items.id as id,
            history_visits.title as title,
@@ -156,7 +141,6 @@ function getHistoryQuery(searchText: string, maxResults: number): string {
            datetime(history_visits.visit_time + 978307200, "unixepoch", "localtime") as lastVisited
       FROM history_items
       INNER JOIN history_visits ON history_visits.history_item = history_items.id
-      ${whereClause}
       GROUP BY history_items.url
       ORDER BY history_visits.visit_time DESC
       LIMIT ${maxResults}
@@ -214,7 +198,7 @@ export function useSafariBookmarks() {
   };
 }
 
-export function useSafariHistory(appIdentifier: string, searchText: string, maxResults: number) {
-  const query = getHistoryQuery(searchText, maxResults);
+export function useSafariHistory(appIdentifier: string, maxResults: number) {
+  const query = getHistoryQuery(maxResults);
   return useSQL<HistoryItem>(getHistoryDbPath(appIdentifier), query);
 }

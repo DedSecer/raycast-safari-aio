@@ -28,7 +28,8 @@ export function searchEntries(entries: UnifiedEntry[], searchText: string, useFu
     return entries;
   }
 
-  if (!useFuzzy) {
+  // For very short queries, plain includes is faster and avoids Fuse overhead.
+  if (!useFuzzy || query.length < 2) {
     const lowered = query.toLowerCase();
     return entries.filter((entry) => {
       const title = entry.title.toLowerCase();

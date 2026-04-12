@@ -132,7 +132,7 @@ export default function Command() {
   const localTabs = useLocalSafariTabs(preferences.safariAppIdentifier);
   const remoteTabs = useRemoteSafariTabs(preferences.areRemoteTabsUsed, maxResultsPerSource * 2);
   const bookmarks = useSafariBookmarks();
-  const history = useSafariHistory(preferences.safariAppIdentifier, searchText, maxResultsPerSource * 2);
+  const history = useSafariHistory(preferences.safariAppIdentifier, maxResultsPerSource * 10);
 
   const tabEntries = useMemo(
     () => toTabEntries(localTabs.data ?? [], remoteTabs.data ?? [], preferences.areRemoteTabsUsed),
@@ -234,7 +234,7 @@ export default function Command() {
       onSearchTextChange={setSearchText}
       searchBarPlaceholder="Search Safari tabs, bookmarks, and history"
       filtering={false}
-      throttle={true}
+      throttle={false}
     >
       {warnings.length > 0 ? (
         <List.Section title="Warnings">

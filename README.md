@@ -1,4 +1,4 @@
-# Safari-Aio
+# Safari-AIO
 
 Search Safari tabs, bookmarks, and history in a single Raycast command.
 
@@ -17,7 +17,7 @@ Search Safari tabs, bookmarks, and history in a single Raycast command.
 
 ## Preferences
 
-In Raycast command preferences for Search Safari-Aio:
+In Raycast command preferences for Safari-AIO:
 
 - Local Safari Browser: Safari or Safari Technology Preview
 - Devices: include iCloud tabs

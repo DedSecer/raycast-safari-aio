@@ -16,19 +16,21 @@ async function switchToSafariTab(windowId: number, tabIndex: number, appIdentifi
 
 export function EntryActions(props: { entry: UnifiedEntry; appIdentifier: string }) {
   const { entry, appIdentifier } = props;
+  const isLocalTab = entry.kind === "tab" && typeof entry.windowId === "number" && typeof entry.tabIndex === "number";
 
   return (
     <ActionPanel>
       <ActionPanel.Section>
-        <Action title="Open in Safari" icon={Icon.Safari} onAction={() => open(entry.url, appIdentifier)} />
-        <Action.OpenInBrowser url={entry.url} />
-        {entry.kind === "tab" && typeof entry.windowId === "number" && typeof entry.tabIndex === "number" ? (
+        {isLocalTab ? (
           <Action
             title="Switch to Existing Tab"
             icon={Icon.Eye}
-            onAction={() => switchToSafariTab(entry.windowId as number, entry.tabIndex as number, appIdentifier)}
+            onAction={() => switchToSafariTab(entry.windowId, entry.tabIndex, appIdentifier)}
           />
-        ) : null}
+        ) : (
+          <Action title="Open in Safari" icon={Icon.Safari} onAction={() => open(entry.url, appIdentifier)} />
+        )}
+        <Action.OpenInBrowser url={entry.url} />
       </ActionPanel.Section>
       <ActionPanel.Section>
         <Action.CopyToClipboard title="Copy URL" content={entry.url} />

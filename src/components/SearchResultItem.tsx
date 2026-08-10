@@ -1,8 +1,8 @@
 import { Icon, List } from "@raycast/api";
 import { getFavicon } from "@raycast/utils";
-import { EntryActions } from "./EntryActions";
+import { EntryActions, EnabledSources } from "./EntryActions";
 import { getSourceColor, getSourceLabel } from "../utils";
-import { UnifiedEntry } from "../types";
+import { SourceKind, UnifiedEntry } from "../types";
 
 function getItemIcon(url: string): List.Item.Props["icon"] {
   if (!/^https?:\/\//i.test(url)) {
@@ -33,8 +33,13 @@ function buildAccessories(entry: UnifiedEntry): List.Item.Accessory[] {
   return accessories;
 }
 
-export function SearchResultItem(props: { entry: UnifiedEntry; appIdentifier: string }) {
-  const { entry, appIdentifier } = props;
+export function SearchResultItem(props: {
+  entry: UnifiedEntry;
+  appIdentifier: string;
+  enabledSources: EnabledSources;
+  onToggleSource: (source: SourceKind) => void;
+}) {
+  const { entry, appIdentifier, enabledSources, onToggleSource } = props;
 
   return (
     <List.Item
@@ -43,7 +48,14 @@ export function SearchResultItem(props: { entry: UnifiedEntry; appIdentifier: st
       subtitle={{ value: entry.domain ?? entry.url, tooltip: entry.url }}
       icon={getItemIcon(entry.url)}
       accessories={buildAccessories(entry)}
-      actions={<EntryActions entry={entry} appIdentifier={appIdentifier} />}
+      actions={
+        <EntryActions
+          entry={entry}
+          appIdentifier={appIdentifier}
+          enabledSources={enabledSources}
+          onToggleSource={onToggleSource}
+        />
+      }
     />
   );
 }

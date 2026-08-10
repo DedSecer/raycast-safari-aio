@@ -10,6 +10,7 @@ import { getMaxResultsPerSource, getPreferences, resolveSourceOrder } from "./pr
 import { SourceKind, UnifiedEntry } from "./types";
 import { dedupeEntriesByUrl, searchEntries } from "./utils";
 import { SearchResultItem } from "./components/SearchResultItem";
+import { EnabledSources, SourceToggleActions } from "./components/EntryActions";
 import { toBookmarkEntries, toHistoryEntries, toSectionResults, toTabEntries } from "./tools/unifiedEntries";
 
 const sourceSectionTitle: Record<SourceKind, string> = {
@@ -41,6 +42,15 @@ export default function Command() {
   const sourceOrder = resolveSourceOrder(preferences);
 
   const [searchText, setSearchText] = useState("");
+  const [enabledSources, setEnabledSources] = useState<EnabledSources>({
+    tab: true,
+    bookmark: true,
+    history: true,
+  });
+
+  const toggleSource = (source: SourceKind) => {
+    setEnabledSources((current) => ({ ...current, [source]: !current[source] }));
+  };
 
   const localTabs = useLocalSafariTabs(preferences.safariAppIdentifier);
   const remoteTabs = useRemoteSafariTabs(preferences.areRemoteTabsUsed, maxResultsPerSource * 2);
@@ -73,10 +83,12 @@ export default function Command() {
   const flatResults = useMemo(() => {
     const ordered: UnifiedEntry[] = [];
     for (const source of sourceOrder) {
-      ordered.push(...filteredBySource[source]);
+      if (enabledSources[source]) {
+        ordered.push(...filteredBySource[source]);
+      }
     }
     return dedupeEntriesByUrl(ordered);
-  }, [filteredBySource, sourceOrder]);
+  }, [enabledSources, filteredBySource, sourceOrder]);
 
   const sectionResults = useMemo<Record<SourceKind, UnifiedEntry[]>>(
     () => toSectionResults(flatResults),
@@ -118,7 +130,16 @@ export default function Command() {
       {warnings.length > 0 ? (
         <List.Section title="Warnings">
           {warnings.map((warning, index) => (
-            <List.Item key={`warning-${index}`} title={warning} icon={Icon.ExclamationMark} />
+            <List.Item
+              key={`warning-${index}`}
+              title={warning}
+              icon={Icon.ExclamationMark}
+              actions={
+                <ActionPanel>
+                  <SourceToggleActions enabledSources={enabledSources} onToggleSource={toggleSource} />
+                </ActionPanel>
+              }
+            />
           ))}
         </List.Section>
       ) : null}
@@ -126,7 +147,13 @@ export default function Command() {
       {preferences.listDisplayMode === "flat" ? (
         <List.Section title="Results" subtitle={`${flatResults.length}`}>
           {flatResults.map((entry) => (
-            <SearchResultItem key={entry.id} entry={entry} appIdentifier={preferences.safariAppIdentifier} />
+            <SearchResultItem
+              key={entry.id}
+              entry={entry}
+              appIdentifier={preferences.safariAppIdentifier}
+              enabledSources={enabledSources}
+              onToggleSource={toggleSource}
+            />
           ))}
         </List.Section>
       ) : (
@@ -139,7 +166,13 @@ export default function Command() {
           return (
             <List.Section key={source} title={sourceSectionTitle[source]} subtitle={`${entries.length}`}>
               {entries.map((entry) => (
-                <SearchResultItem key={entry.id} entry={entry} appIdentifier={preferences.safariAppIdentifier} />
+                <SearchResultItem
+                  key={entry.id}
+                  entry={entry}
+                  appIdentifier={preferences.safariAppIdentifier}
+                  enabledSources={enabledSources}
+                  onToggleSource={toggleSource}
+                />
               ))}
             </List.Section>
           );
@@ -153,12 +186,15 @@ export default function Command() {
           icon={Icon.MagnifyingGlass}
           actions={
             <ActionPanel>
-              <Action
-                title="Configure Command"
-                icon={Icon.Gear}
-                shortcut={{ modifiers: ["shift", "cmd"], key: "," }}
-                onAction={openCommandPreferences}
-              />
+              <SourceToggleActions enabledSources={enabledSources} onToggleSource={toggleSource} />
+              <ActionPanel.Section>
+                <Action
+                  title="Configure Command"
+                  icon={Icon.Gear}
+                  shortcut={{ modifiers: ["shift", "cmd"], key: "," }}
+                  onAction={openCommandPreferences}
+                />
+              </ActionPanel.Section>
             </ActionPanel>
           }
         />

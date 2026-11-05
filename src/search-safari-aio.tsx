@@ -8,7 +8,8 @@ import {
 } from "./hooks/useSafariSources";
 import { getMaxResultsPerSource, getPreferences, resolveSourceOrder } from "./preferences";
 import { SourceKind, UnifiedEntry } from "./types";
-import { dedupeEntriesByUrl, searchEntries } from "./utils";
+import { createEntrySearch, limitSourceResults } from "./utils";
+import { classifySourceError } from "./tools/sourceErrors";
 import { SearchResultItem } from "./components/SearchResultItem";
 import { EnabledSources, SourceToggleActions } from "./components/EntryActions";
 import { toBookmarkEntries, toHistoryEntries, toSectionResults, toTabEntries } from "./tools/unifiedEntries";
@@ -19,27 +20,14 @@ const sourceSectionTitle: Record<SourceKind, string> = {
   history: "History",
 };
 
-function hasPermissionIssue(result: unknown): boolean {
-  const maybeResult = result as { permissionView?: unknown; error?: unknown };
-  if (maybeResult.permissionView) {
-    return true;
-  }
-
-  if (maybeResult.error instanceof Error) {
-    return maybeResult.error.message.includes("operation not permitted");
-  }
-
-  if (typeof maybeResult.error === "string") {
-    return maybeResult.error.includes("operation not permitted");
-  }
-
-  return false;
-}
-
 export default function Command() {
   const preferences = getPreferences();
   const maxResultsPerSource = getMaxResultsPerSource(preferences);
-  const sourceOrder = resolveSourceOrder(preferences);
+  const { firstPriority, secondPriority, thirdPriority } = preferences;
+  const sourceOrder = useMemo(
+    () => resolveSourceOrder({ firstPriority, secondPriority, thirdPriority }),
+    [firstPriority, secondPriority, thirdPriority],
+  );
 
   const [searchText, setSearchText] = useState("");
   const [enabledSources, setEnabledSources] = useState<EnabledSources>({
@@ -66,19 +54,18 @@ export default function Command() {
 
   const historyEntries = useMemo<UnifiedEntry[]>(() => toHistoryEntries(history.data ?? []), [history.data]);
 
-  const filteredBySource = useMemo<Record<SourceKind, UnifiedEntry[]>>(() => {
-    const tabs = searchEntries(tabEntries, searchText, true).slice(0, maxResultsPerSource);
-    const bookmark = searchEntries(bookmarkEntries, searchText, true).slice(0, maxResultsPerSource);
-    const historyItems = searchEntries(historyEntries, searchText, true)
-      .sort((a, b) => (b.sortDate ?? 0) - (a.sortDate ?? 0))
-      .slice(0, maxResultsPerSource);
+  const searchTabs = useMemo(() => createEntrySearch(tabEntries), [tabEntries]);
+  const searchBookmarks = useMemo(() => createEntrySearch(bookmarkEntries), [bookmarkEntries]);
+  const searchHistory = useMemo(() => createEntrySearch(historyEntries), [historyEntries]);
 
-    return {
-      tab: tabs,
-      bookmark,
-      history: historyItems,
-    };
-  }, [tabEntries, searchText, maxResultsPerSource, bookmarkEntries, historyEntries]);
+  const filteredBySource = useMemo<Record<SourceKind, UnifiedEntry[]>>(
+    () => ({
+      tab: enabledSources.tab ? limitSourceResults(searchTabs(searchText), maxResultsPerSource) : [],
+      bookmark: enabledSources.bookmark ? limitSourceResults(searchBookmarks(searchText), maxResultsPerSource) : [],
+      history: enabledSources.history ? limitSourceResults(searchHistory(searchText), maxResultsPerSource, true) : [],
+    }),
+    [enabledSources, searchTabs, searchBookmarks, searchHistory, searchText, maxResultsPerSource],
+  );
 
   const flatResults = useMemo(() => {
     const ordered: UnifiedEntry[] = [];
@@ -87,7 +74,7 @@ export default function Command() {
         ordered.push(...filteredBySource[source]);
       }
     }
-    return dedupeEntriesByUrl(ordered);
+    return ordered;
   }, [enabledSources, filteredBySource, sourceOrder]);
 
   const sectionResults = useMemo<Record<SourceKind, UnifiedEntry[]>>(
@@ -95,23 +82,23 @@ export default function Command() {
     [flatResults],
   );
 
-  const warnings = useMemo(() => {
-    const messages: string[] = [];
-
-    if (bookmarks.permissionError) {
-      messages.push("Bookmarks are unavailable. Grant Full Disk Access to Raycast.");
-    }
-
-    if (hasPermissionIssue(history)) {
-      messages.push("History is unavailable. Grant Full Disk Access to Raycast.");
-    }
-
-    if (preferences.areRemoteTabsUsed && hasPermissionIssue(remoteTabs)) {
-      messages.push("Remote iCloud tabs are unavailable. Check Safari iCloud permissions.");
-    }
-
-    return messages;
-  }, [bookmarks.permissionError, history, preferences.areRemoteTabsUsed, remoteTabs]);
+  const warnings = [
+    { id: "bookmarks", title: "Bookmarks", result: bookmarks },
+    { id: "history", title: "History", result: history },
+    ...(preferences.areRemoteTabsUsed ? [{ id: "remote", title: "iCloud tabs", result: remoteTabs }] : []),
+  ]
+    .filter(({ result }) => Boolean(result.error))
+    .map(({ id, title, result }) => ({
+      id,
+      isPermission: classifySourceError(result.error) === "permission",
+      title:
+        classifySourceError(result.error) === "permission"
+          ? `${title} unavailable. Check Raycast's Full Disk Access and Safari permissions.`
+          : `${title} could not be refreshed. Check Safari data availability and retry.`,
+      retry: async () => {
+        await result.revalidate();
+      },
+    }));
 
   const isLoading =
     localTabs.isLoading ||
@@ -129,13 +116,22 @@ export default function Command() {
     >
       {warnings.length > 0 ? (
         <List.Section title="Warnings">
-          {warnings.map((warning, index) => (
+          {warnings.map((warning) => (
             <List.Item
-              key={`warning-${index}`}
-              title={warning}
+              key={warning.id}
+              title={warning.title}
               icon={Icon.ExclamationMark}
               actions={
                 <ActionPanel>
+                  <Action title="Retry Source" icon={Icon.ArrowClockwise} onAction={warning.retry} />
+                  {warning.isPermission ? (
+                    <Action.Open
+                      title="Open Full Disk Access Settings"
+                      icon={Icon.Lock}
+                      target="x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+                    />
+                  ) : null}
+                  <Action title="Configure Command" icon={Icon.Gear} onAction={openCommandPreferences} />
                   <SourceToggleActions enabledSources={enabledSources} onToggleSource={toggleSource} />
                 </ActionPanel>
               }
@@ -151,6 +147,7 @@ export default function Command() {
               key={entry.id}
               entry={entry}
               appIdentifier={preferences.safariAppIdentifier}
+              showFavicons={preferences.showFavicons}
               enabledSources={enabledSources}
               onToggleSource={toggleSource}
             />
@@ -170,6 +167,7 @@ export default function Command() {
                   key={entry.id}
                   entry={entry}
                   appIdentifier={preferences.safariAppIdentifier}
+                  showFavicons={preferences.showFavicons}
                   enabledSources={enabledSources}
                   onToggleSource={toggleSource}
                 />

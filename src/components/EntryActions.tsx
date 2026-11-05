@@ -1,6 +1,16 @@
-import { Action, ActionPanel, closeMainWindow, Icon, open, openCommandPreferences, showHUD } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  closeMainWindow,
+  Icon,
+  open,
+  openCommandPreferences,
+  showToast,
+  Toast,
+} from "@raycast/api";
 import { runAppleScript } from "@raycast/utils";
-import { SourceKind, UnifiedEntry } from "../types";
+import type { SafariAppIdentifier, SourceKind, UnifiedEntry } from "../types";
+import { normalizeSafariApp } from "../tools/preferenceValues";
 
 export type EnabledSources = Record<SourceKind, boolean>;
 
@@ -15,7 +25,6 @@ export function SourceToggleActions(props: {
   onToggleSource: (source: SourceKind) => void;
 }) {
   const { enabledSources, onToggleSource } = props;
-
   return (
     <ActionPanel.Section title="Sources">
       {(Object.keys(sourceTitles) as SourceKind[]).map((source) => (
@@ -30,87 +39,120 @@ export function SourceToggleActions(props: {
   );
 }
 
-function escapeAppleScriptString(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n");
-}
-
 async function switchToSafariTab(
   windowId: number,
   tabIndex: number,
   url: string,
-  appIdentifier: string,
+  appIdentifier: SafariAppIdentifier,
 ): Promise<void> {
-  const targetURL = escapeAppleScriptString(url);
-  const result = await runAppleScript(`
-    tell application "${appIdentifier}"
-      set targetURL to "${targetURL}"
-      set matchedWindow to 0
-      set matchedTab to 0
-
-      if (count of windows) >= ${windowId} then
-        if (count of tabs of window ${windowId}) >= ${tabIndex} then
-          if URL of tab ${tabIndex} of window ${windowId} is targetURL then
-            set matchedWindow to ${windowId}
-            set matchedTab to ${tabIndex}
-          end if
-        end if
-      end if
-
-      if matchedWindow is 0 then
-        repeat with currentWindow from 1 to count of windows
-          set currentWindowRef to window currentWindow
-          repeat with currentTab from 1 to count of tabs of currentWindowRef
-            if URL of tab currentTab of currentWindowRef is targetURL then
-              set matchedWindow to currentWindow
-              set matchedTab to currentTab
-              exit repeat
+  try {
+    const app = normalizeSafariApp(appIdentifier);
+    const result = await runAppleScript(
+      `
+      on run argv
+        set targetWindow to (item 1 of argv) as integer
+        set targetTab to (item 2 of argv) as integer
+        set targetURL to item 3 of argv
+        set targetApp to item 4 of argv
+        considering case
+        using terms from application "Safari"
+        tell application targetApp
+          set matchedWindow to 0
+          set matchedTab to 0
+          try
+            if (count of windows) >= targetWindow then
+              if (count of tabs of window targetWindow) >= targetTab then
+                if URL of tab targetTab of window targetWindow is targetURL then
+                  set matchedWindow to targetWindow
+                  set matchedTab to targetTab
+                end if
+              end if
             end if
-          end repeat
-          if matchedWindow is not 0 then
-            exit repeat
+          end try
+
+          if matchedWindow is 0 then
+            repeat with w from 1 to count of windows
+              try
+                set winRef to window w
+                repeat with t from 1 to count of tabs of winRef
+                  try
+                    if URL of tab t of winRef is targetURL then
+                      set matchedWindow to w as integer
+                      set matchedTab to t as integer
+                      exit repeat
+                    end if
+                  end try
+                end repeat
+              end try
+              if matchedWindow is not 0 then exit repeat
+            end repeat
           end if
-        end repeat
-      end if
 
-      if matchedWindow is not 0 then
-        activate
-        set current tab of window matchedWindow to tab matchedTab of window matchedWindow
-        set index of window matchedWindow to 1
-        return (matchedWindow as text) & "::" & (matchedTab as text)
-      end if
-
-      return ""
-    end tell
-  `);
-
-  if (!result || typeof result !== "string") {
-    await showHUD("Safari 标签页已关闭或已发生变化");
-    return;
+          if matchedWindow is 0 then return ""
+          if URL of tab matchedTab of window matchedWindow is not targetURL then return ""
+          activate
+          set current tab of window matchedWindow to tab matchedTab of window matchedWindow
+          set index of window matchedWindow to 1
+          return "switched"
+        end tell
+        end using terms from
+        end considering
+      end run
+      `,
+      [String(windowId), String(tabIndex), url, app],
+    );
+    if (result.trim() !== "switched") {
+      await showToast({ style: Toast.Style.Failure, title: "Safari tab was closed or changed" });
+      return;
+    }
+    await closeMainWindow();
+  } catch {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Could not switch to Safari tab",
+      message: "Check Raycast's Safari automation permission and try again.",
+    });
   }
+}
 
-  await closeMainWindow();
+async function openInSafari(url: string, appIdentifier: SafariAppIdentifier): Promise<void> {
+  try {
+    await open(url, normalizeSafariApp(appIdentifier));
+  } catch {
+    await showToast({ style: Toast.Style.Failure, title: "Could not open URL in Safari" });
+  }
 }
 
 export function EntryActions(props: {
   entry: UnifiedEntry;
-  appIdentifier: string;
+  appIdentifier: SafariAppIdentifier;
   enabledSources: EnabledSources;
   onToggleSource: (source: SourceKind) => void;
 }) {
   const { entry, appIdentifier, enabledSources, onToggleSource } = props;
-  const isLocalTab = entry.kind === "tab" && typeof entry.windowId === "number" && typeof entry.tabIndex === "number";
+  const { windowId, tabIndex } = entry;
+  const localPosition =
+    entry.kind === "tab" &&
+    typeof windowId === "number" &&
+    Number.isInteger(windowId) &&
+    windowId > 0 &&
+    typeof tabIndex === "number" &&
+    Number.isInteger(tabIndex) &&
+    tabIndex > 0
+      ? { windowId, tabIndex }
+      : undefined;
 
   return (
     <ActionPanel>
       <ActionPanel.Section>
-        {isLocalTab ? (
+        {localPosition ? (
           <Action
             title="Switch to Existing Tab"
             icon={Icon.Eye}
-            onAction={() => switchToSafariTab(entry.windowId, entry.tabIndex, entry.url, appIdentifier)}
+            onAction={() => switchToSafariTab(localPosition.windowId, localPosition.tabIndex, entry.url, appIdentifier)}
           />
         ) : (
-          <Action title="Open in Safari" icon={Icon.Safari} onAction={() => open(entry.url, appIdentifier)} />
+          <Action title="Open in Safari" icon={Icon.Globe} onAction={() => openInSafari(entry.url, appIdentifier)} />
         )}
         <Action.OpenInBrowser url={entry.url} />
       </ActionPanel.Section>

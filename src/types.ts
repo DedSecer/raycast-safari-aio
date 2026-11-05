@@ -4,9 +4,12 @@ export type PriorityLabel = "Tabs" | "Bookmarks" | "History";
 
 export type ListDisplayMode = "flat" | "section";
 
+export type SafariAppIdentifier = "Safari" | "Safari Technology Preview";
+
 export interface SearchSafariAioPreferences {
-  safariAppIdentifier: "Safari" | "Safari Technology Preview";
+  safariAppIdentifier: SafariAppIdentifier;
   areRemoteTabsUsed: boolean;
+  showFavicons: boolean;
   listDisplayMode: ListDisplayMode;
   firstPriority: PriorityLabel;
   secondPriority: PriorityLabel;

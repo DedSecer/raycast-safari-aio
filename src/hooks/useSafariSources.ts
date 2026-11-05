@@ -1,204 +1,164 @@
-import { useCachedPromise, useSQL } from "@raycast/utils";
-import { useState } from "react";
+import { executeSQL, runAppleScript, useCachedPromise, usePromise } from "@raycast/utils";
 import { homedir } from "os";
 import { resolve } from "path";
 import { promisify } from "util";
-import { runAppleScript } from "@raycast/utils";
 import { execFile } from "child_process";
 import { parse as parsePlist } from "plist";
-import { BookmarkEntry, BookmarkLeaf, BookmarkTreeNode, HistoryItem, LocalTab, RemoteTab } from "../types";
-import { getUrlDomain } from "../utils";
+import type { BookmarkEntry, HistoryItem, LocalTab, RemoteTab, SafariAppIdentifier } from "../types";
+import {
+  assertSafariAppIdentifier,
+  flattenBookmarks,
+  getHistoryQuery,
+  getRemoteTabsQuery,
+  parseLocalTabs,
+} from "../tools/safariData";
+import { toSourceError } from "../tools/sourceErrors";
 
 const execFileAsync = promisify(execFile);
 
 const BOOKMARKS_PLIST_PATH = `${homedir()}/Library/Safari/Bookmarks.plist`;
-const CLOUD_TABS_DB = `${resolve(homedir(), "Library/Containers/com.apple.Safari/Data/Library/Safari")}/CloudTabs.db`;
+const CLOUD_TABS_DB = resolve(homedir(), "Library/Containers/com.apple.Safari/Data/Library/Safari/CloudTabs.db");
 
-function normalizeFolderTitle(title: string): string {
-  if (title === "com.apple.ReadingList") {
-    return "Reading List";
-  }
-  if (title === "BookmarksBar") {
-    return "Favorites";
-  }
-  if (title === "BookmarksMenu") {
-    return "Bookmarks Menu";
-  }
-
-  return title;
-}
-
-function flattenBookmarks(node: BookmarkTreeNode, folderPath = ""): BookmarkEntry[] {
-  const entries: BookmarkEntry[] = [];
-
-  const isLeaf = node.WebBookmarkType === "WebBookmarkTypeLeaf";
-  if (isLeaf) {
-    const leaf = node as BookmarkLeaf;
-    if (typeof leaf.URLString === "string" && leaf.URLString.length > 0) {
-      const title = leaf.Title ?? leaf.ReadingListNonSync?.Title ?? leaf.URIDictionary?.title ?? leaf.URLString;
-      entries.push({
-        uuid: leaf.WebBookmarkUUID ?? leaf.URLString,
-        title,
-        url: leaf.URLString,
-        folder: folderPath,
-        domain: getUrlDomain(leaf.URLString),
-      });
+// Positions remain one-based indexes, even if an individual window/tab disappears.
+const LOCAL_TABS_SCRIPT = `
+  function run(argv) {
+    var records = [];
+    try {
+      var appName = argv[0];
+      if (appName !== "Safari" && appName !== "Safari Technology Preview") return "[]";
+      var app = Application(appName);
+      var windows = app.windows();
+      for (var w = 0; w < windows.length; w++) {
+        try {
+          var win = windows[w];
+          var tabs = win.tabs();
+          for (var t = 0; t < tabs.length; t++) {
+            try {
+              var tab = tabs[t];
+              var url = tab.url();
+              var title = "";
+              try { title = tab.name(); } catch (_) {}
+              records.push({ window_id: w + 1, index: t + 1, title: title, url: url });
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      return JSON.stringify(records);
+    } catch (_) {
+      return "[]";
     }
-    return entries;
   }
-
-  const children = Array.isArray(node.Children) ? node.Children : [];
-  const rawTitle = typeof node.Title === "string" ? normalizeFolderTitle(node.Title) : "";
-
-  // Reading List is not part of bookmark search for this command.
-  if (rawTitle === "Reading List") {
-    return entries;
-  }
-
-  const nextFolderPath = rawTitle ? (folderPath ? `${folderPath}/${rawTitle}` : rawTitle) : folderPath;
-
-  for (const child of children) {
-    entries.push(...flattenBookmarks(child, nextFolderPath));
-  }
-
-  return entries;
-}
+`;
 
 async function fetchBookmarks(): Promise<BookmarkEntry[]> {
-  const { stdout } = await execFileAsync("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", BOOKMARKS_PLIST_PATH], {
-    maxBuffer: 1024 * 1024 * 100,
-  });
-  const root = parsePlist(stdout) as BookmarkTreeNode;
-  return flattenBookmarks(root).filter((entry) => Boolean(entry.url));
-}
-
-async function fetchLocalTabs(appIdentifier: string): Promise<LocalTab[]> {
   try {
-    const script = `
-      tell application "${appIdentifier}"
-        if (count of windows) is 0 then
-          return ""
-        end if
-
-        set output to ""
-        repeat with w from 1 to count of windows
-          set winRef to window w
-          repeat with t from 1 to count of tabs of winRef
-            set tabTitle to name of tab t of winRef
-            set tabURL to URL of tab t of winRef
-            if output is not "" then
-              set output to output & "::REC::"
-            end if
-            set output to output & w & "::COL::" & t & "::COL::" & tabTitle & "::COL::" & tabURL
-          end repeat
-        end repeat
-
-        return output
-      end tell
-    `;
-
-    const rawOutput = await runAppleScript(script);
-    if (!rawOutput || typeof rawOutput !== "string") {
-      return [];
+    const { stdout } = await execFileAsync("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", BOOKMARKS_PLIST_PATH], {
+      maxBuffer: 1024 * 1024 * 100,
+    });
+    const root: unknown = parsePlist(stdout);
+    if (typeof root !== "object" || root === null || Array.isArray(root)) {
+      throw new Error("Invalid Safari bookmarks response");
     }
+    return flattenBookmarks(root);
+  } catch (error) {
+    throw toSourceError(error);
+  }
+}
 
-    const entries = rawOutput
-      .split("::REC::")
-      .map((record) => record.split("::COL::"))
-      .filter((parts) => parts.length >= 4)
-      .map((parts) => {
-        const windowId = Number.parseInt(parts[0], 10);
-        const tabIndex = Number.parseInt(parts[1], 10);
-        const title = parts[2] || parts[3];
-        const url = parts[3] || "";
-
-        return {
-          uuid: `${windowId}-${tabIndex}`,
-          title,
-          url,
-          window_id: windowId,
-          index: tabIndex,
-          is_local: true,
-        } satisfies LocalTab;
-      })
-      .filter((tab) => Number.isFinite(tab.window_id) && Number.isFinite(tab.index) && tab.url.length > 0);
-
-    return entries;
+async function fetchLocalTabs(appIdentifier: SafariAppIdentifier): Promise<{
+  appIdentifier: SafariAppIdentifier;
+  tabs: LocalTab[];
+}> {
+  try {
+    assertSafariAppIdentifier(appIdentifier);
+    const rawOutput = await runAppleScript(LOCAL_TABS_SCRIPT, [appIdentifier], { language: "JavaScript" });
+    const decoded: unknown = JSON.parse(rawOutput);
+    return { appIdentifier, tabs: parseLocalTabs(decoded) };
   } catch {
-    return [];
+    // Preserve the existing silent degradation for local automation failures.
+    return { appIdentifier, tabs: [] };
   }
 }
 
-function getHistoryDbPath(appIdentifier: string): string {
-  return `${resolve(homedir(), `Library/${appIdentifier.replace(/ /g, "")}/`)}/History.db`;
+function getHistoryDbPath(appIdentifier: SafariAppIdentifier): string {
+  assertSafariAppIdentifier(appIdentifier);
+  const directory = appIdentifier === "Safari" ? "Safari" : "SafariTechnologyPreview";
+  return resolve(homedir(), "Library", directory, "History.db");
 }
 
-function getHistoryQuery(maxResults: number): string {
-  return `
-    SELECT history_items.id as id,
-           history_visits.title as title,
-           history_items.url as url,
-           datetime(history_visits.visit_time + 978307200, "unixepoch", "localtime") as lastVisited
-      FROM history_items
-      INNER JOIN history_visits ON history_visits.history_item = history_items.id
-      GROUP BY history_items.url
-      ORDER BY history_visits.visit_time DESC
-      LIMIT ${maxResults}
-  `;
-}
-
-function getRemoteTabsQuery(enabled: boolean, maxResults: number): string {
-  if (!enabled) {
-    return `
-      SELECT "" as uuid,
-             "" as device_uuid,
-             "" as device_name,
-             "" as title,
-             "" as url
-      WHERE 1 = 0
-    `;
+async function fetchRemoteTabs(enabled: boolean, maxResults: number): Promise<RemoteTab[]> {
+  // revalidate is public and can be called even while execute is false.
+  if (!enabled) return [];
+  try {
+    return await executeSQL<RemoteTab>(CLOUD_TABS_DB, getRemoteTabsQuery(maxResults));
+  } catch (error) {
+    throw toSourceError(error);
   }
-
-  return `
-    SELECT t.tab_uuid as uuid,
-           d.device_uuid,
-           d.device_name,
-           t.title,
-           t.url
-      FROM cloud_tabs t
-      INNER JOIN cloud_tab_devices d ON t.device_uuid = d.device_uuid
-      ORDER BY d.device_name ASC
-      LIMIT ${maxResults}
-  `;
 }
 
-export function useLocalSafariTabs(appIdentifier: string) {
-  return useCachedPromise(fetchLocalTabs, [appIdentifier], { keepPreviousData: true });
+async function fetchHistory(
+  appIdentifier: SafariAppIdentifier,
+  maxResults: number,
+): Promise<{ appIdentifier: SafariAppIdentifier; items: HistoryItem[]; error?: Error }> {
+  try {
+    const items = await executeSQL<HistoryItem>(getHistoryDbPath(appIdentifier), getHistoryQuery(maxResults));
+    return { appIdentifier, items };
+  } catch (error) {
+    // Carry request ownership on failures as well as successful (including empty) results.
+    return { appIdentifier, items: [], error: toSourceError(error) };
+  }
 }
 
-export function useRemoteSafariTabs(enabled: boolean, maxResults: number) {
-  const query = getRemoteTabsQuery(enabled, maxResults);
-  return useSQL<RemoteTab>(CLOUD_TABS_DB, query);
-}
+// The command renders source-specific warnings/retry actions rather than generic failure toasts.
+function handleSourceError() {}
 
-export function useSafariBookmarks() {
-  const [permissionError, setPermissionError] = useState(false);
-  const result = useCachedPromise(fetchBookmarks, [], {
+export function useLocalSafariTabs(appIdentifier: SafariAppIdentifier) {
+  const result = useCachedPromise(fetchLocalTabs, [appIdentifier], {
     keepPreviousData: true,
-    onError(error) {
-      if (error instanceof Error && error.message.includes("operation not permitted")) {
-        setPermissionError(true);
-      }
-    },
+    onError: handleSourceError,
   });
-
+  const belongsToApp = result.data?.appIdentifier === appIdentifier;
   return {
-    ...result,
-    permissionError,
+    data: belongsToApp ? result.data?.tabs : undefined,
+    isLoading: result.isLoading || !belongsToApp,
+    error: undefined,
+    revalidate: result.revalidate,
   };
 }
 
-export function useSafariHistory(appIdentifier: string, maxResults: number) {
-  const query = getHistoryQuery(maxResults);
-  return useSQL<HistoryItem>(getHistoryDbPath(appIdentifier), query);
+export function useRemoteSafariTabs(enabled: boolean, maxResults: number) {
+  const result = usePromise(fetchRemoteTabs, [enabled, maxResults], {
+    execute: enabled,
+    onError: handleSourceError,
+  });
+  return {
+    data: enabled ? result.data : undefined,
+    isLoading: enabled && result.isLoading,
+    error: enabled ? result.error : undefined,
+    revalidate: result.revalidate,
+  };
+}
+
+export function useSafariBookmarks() {
+  const result = useCachedPromise(fetchBookmarks, [], {
+    keepPreviousData: true,
+    onError: handleSourceError,
+  });
+  return {
+    data: result.data,
+    isLoading: result.isLoading,
+    error: result.error,
+    revalidate: result.revalidate,
+  };
+}
+
+export function useSafariHistory(appIdentifier: SafariAppIdentifier, maxResults: number) {
+  const result = usePromise(fetchHistory, [appIdentifier, maxResults], { onError: handleSourceError });
+  const belongsToApp = result.data?.appIdentifier === appIdentifier;
+  return {
+    data: belongsToApp ? result.data?.items : undefined,
+    isLoading: result.isLoading || !belongsToApp,
+    error: belongsToApp ? result.data?.error : undefined,
+    revalidate: result.revalidate,
+  };
 }

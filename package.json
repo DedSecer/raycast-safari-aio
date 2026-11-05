@@ -48,6 +48,15 @@
           "label": "iCloud"
         },
         {
+          "name": "showFavicons",
+          "type": "checkbox",
+          "required": false,
+          "title": "Website Icons",
+          "description": "Request website icons from Google using each site's hostname. Disable to use local icons only.",
+          "default": true,
+          "label": "Show favicons"
+        },
+        {
           "name": "listDisplayMode",
           "type": "dropdown",
           "required": false,
@@ -165,9 +174,11 @@
   "devDependencies": {
     "@raycast/eslint-config": "^2.0.4",
     "@types/node": "22.13.10",
+    "@types/plist": "^3.0.5",
     "@types/react": "19.0.10",
     "eslint": "^9.22.0",
     "prettier": "^3.5.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.2"
   },
   "scripts": {
@@ -175,6 +186,8 @@
     "dev": "ray develop",
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "node --import tsx --test tests/*.test.ts",
     "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
     "publish": "npx @raycast/api@latest publish"
   }

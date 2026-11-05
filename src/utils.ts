@@ -1,11 +1,10 @@
-import { Color } from "@raycast/api";
 import Fuse from "fuse.js";
-import { SourceKind, UnifiedEntry } from "./types";
+import type { UnifiedEntry } from "./types";
 
 export function getUrlDomain(url: string): string | undefined {
   try {
     const parsed = new URL(url);
-    return parsed.hostname.replace(/^www\./, "");
+    return parsed.hostname.replace(/^www\./, "") || undefined;
   } catch {
     return undefined;
   }
@@ -15,36 +14,21 @@ export function normalizeUrl(url: string): string {
   try {
     const parsed = new URL(url);
     parsed.hash = "";
-    const pathname = parsed.pathname.replace(/\/$/, "") || "/";
-    return `${parsed.protocol}//${parsed.host}${pathname}${parsed.search}`.toLowerCase();
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      parsed.pathname = parsed.pathname.replace(/\/$/, "") || "/";
+    }
+    return parsed.href;
   } catch {
-    return url.trim().toLowerCase();
+    return url.trim();
   }
 }
 
-export function searchEntries(entries: UnifiedEntry[], searchText: string, useFuzzy: boolean): UnifiedEntry[] {
-  const query = searchText.trim();
-  if (!query) {
-    return entries;
-  }
+export type EntrySearch = (searchText: string, useFuzzy?: boolean) => UnifiedEntry[];
 
-  const lowered = query.toLowerCase();
-  const tokens = lowered.split(/\s+/).filter((token) => token.length > 0);
-
-  const tokenMatched = entries.filter((entry) => {
-    const title = entry.title.toLowerCase();
-    const url = entry.url.toLowerCase();
-    const domain = entry.domain?.toLowerCase() ?? "";
-    const detail = entry.detail?.toLowerCase() ?? "";
-    const haystack = `${title} ${url} ${domain} ${detail}`;
-    return tokens.every((token) => haystack.includes(token));
-  });
-
-  // For very short queries, plain includes is faster and avoids Fuse overhead.
-  if (!useFuzzy || query.length < 2) {
-    return tokenMatched;
-  }
-
+export function createEntrySearch(entries: UnifiedEntry[]): EntrySearch {
+  const haystacks = entries.map((entry) =>
+    `${entry.title} ${entry.url} ${entry.domain ?? ""} ${entry.detail ?? ""}`.toLowerCase(),
+  );
   const fuse = new Fuse(entries, {
     keys: [
       { name: "title", weight: 3 },
@@ -56,76 +40,55 @@ export function searchEntries(entries: UnifiedEntry[], searchText: string, useFu
     ignoreLocation: true,
   });
 
-  const fuzzyMatched = fuse.search(query).map((result) => result.item);
-  if (tokenMatched.length === 0) {
-    return fuzzyMatched;
-  }
-
-  // Prioritize exact token containment and append fuzzy-only matches.
-  const seen = new Set(tokenMatched.map((entry) => entry.id));
-  const merged = [...tokenMatched];
-  for (const entry of fuzzyMatched) {
-    if (!seen.has(entry.id)) {
-      seen.add(entry.id);
-      merged.push(entry);
+  return (searchText, useFuzzy = true) => {
+    const query = searchText.trim();
+    if (!query) {
+      return [...entries];
     }
-  }
+    const tokens = query.toLowerCase().split(/\s+/);
+    const tokenMatched = entries.filter((_, index) => tokens.every((token) => haystacks[index].includes(token)));
+    if (!useFuzzy || query.length < 2) {
+      return tokenMatched;
+    }
 
-  return merged;
+    // Exact all-token containment takes precedence over fuzzy-only matches.
+    const seen = new Set(tokenMatched.map((entry) => entry.id));
+    const merged = [...tokenMatched];
+    for (const { item } of fuse.search(query)) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id);
+        merged.push(item);
+      }
+    }
+    return merged;
+  };
 }
 
-export function getSourceLabel(source: SourceKind): string {
-  switch (source) {
-    case "tab":
-      return "Tab";
-    case "bookmark":
-      return "Bookmark";
-    case "history":
-      return "History";
-  }
+export function searchEntries(entries: UnifiedEntry[], searchText: string, useFuzzy: boolean): UnifiedEntry[] {
+  return createEntrySearch(entries)(searchText, useFuzzy);
 }
 
-export function getSourceColor(source: SourceKind): Color {
-  switch (source) {
-    case "tab":
-      return Color.Blue;
-    case "bookmark":
-      return Color.Green;
-    case "history":
-      return Color.Orange;
-  }
+export function limitSourceResults(entries: UnifiedEntry[], limit: number, newestFirst = false): UnifiedEntry[] {
+  const ordered = newestFirst ? [...entries].sort((a, b) => (b.sortDate ?? 0) - (a.sortDate ?? 0)) : entries;
+  return dedupeEntriesByUrl(ordered).slice(0, limit);
 }
 
 export function dedupeEntriesByUrl(entries: UnifiedEntry[]): UnifiedEntry[] {
   const seen = new Set<string>();
-  const result: UnifiedEntry[] = [];
-
-  for (const entry of entries) {
-    const source = "kind" in entry && typeof entry.kind === "string" ? entry.kind : "entry";
-    const key = `${source}:${normalizeUrl(entry.url)}`;
+  return entries.filter((entry) => {
+    const key = `${entry.kind}:${normalizeUrl(entry.url)}`;
     if (seen.has(key)) {
-      continue;
+      return false;
     }
     seen.add(key);
-    result.push(entry);
-  }
-
-  return result;
+    return true;
+  });
 }
 
 export function parseVisitedDate(lastVisited?: string): number | undefined {
   if (!lastVisited) {
     return undefined;
   }
-
   const timestamp = Date.parse(lastVisited);
-  if (!Number.isFinite(timestamp)) {
-    return undefined;
-  }
-
-  return timestamp;
-}
-
-export function escapeSqlLike(term: string): string {
-  return term.replace(/\\/g, "\\\\").replace(/"/g, '""').replace(/%/g, "\\%").replace(/_/g, "\\_");
+  return Number.isFinite(timestamp) ? timestamp : undefined;
 }
